@@ -15,29 +15,6 @@ a Dev Box `imagedefinition.yaml` as:
 image: <galleryName>/<imageDefinitionName>@latest
 ```
 
-## Why this repo exists
-
-The companion `devbox-customizations` repo uses Dev Box's built-in image
-definition flatten process (`imagedefinition.yaml` → tasks → sysprep →
-captured image). That process does **not** support mid-build reboots, so
-enabling Windows optional features inside `imagedefinition.yaml` causes
-sysprep to fail with:
-
-```
-SYSPRP Sysprep_Clean_Validate_Opk: There are one or more Windows updates
-that require a reboot.
-```
-
-The CBS pending transaction left by `Enable-WindowsOptionalFeature` never
-commits before sysprep runs. Our Dev Box users are Standard Users, so pushing
-the feature enablement to `userTasks` is not an option either.
-
-AIB **does** support an explicit `WindowsRestart` customize step in the
-middle of a build, which commits CBS before sysprep. This repo therefore
-moves those three feature-enablements out of the Dev Box flatten flow and
-into an AIB pipeline that produces a clean, generalized, Trusted Launch, Gen2
-Windows 11 image ready for Dev Box to consume.
-
 ## What gets created
 
 | Resource | Purpose |
