@@ -1,0 +1,84 @@
+name: rebuild-image
+
+on:
+  # Every Wednesday 02:00 UTC. The job has a runtime guard that exits early
+  # unless the date is also between the 8th and 14th, i.e. the SECOND
+  # Wednesday of the month -- safely after Patch Tuesday. (GitHub cron ORs
+  # day-of-month and day-of-week, so we cannot express this purely in cron.)
+  schedule:
+    - cron: "0 2 * * 3"
+  workflow_dispatch:
+    inputs:
+      trigger_build:
+        description: "Kick off an AIB build after apply."
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write   # required for OIDC federated auth to Azure
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  ARM_USE_OIDC: "true"
+  ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+  ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+  ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: devbox-aib-rebuild
+      cancel-in-progress: false
+
+    steps:
+      - name: second-Wednesday guard
+        id: guard
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          day=$(date -u +%d)
+          if (( 10#$day >= 8 && 10#$day <= 14 )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Not the second Wednesday (day=$day). Skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.guard.outputs.run == 'true'
+
+      - uses: azure/login@v2
+        if: steps.guard.outputs.run == 'true'
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - uses: hashicorp/setup-terraform@v3
+        if: steps.guard.outputs.run == 'true'
+        with:
+          terraform_version: "1.9.8"
+          terraform_wrapper: false
+
+      - name: terraform init
+        if: steps.guard.outputs.run == 'true'
+        run: terraform init -input=false
+
+      # Rotate the version stamp so a fresh gallery image version is produced.
+      # This causes time_static.image_version to be replaced, which in turn
+      # replaces the image template (via replace_triggered_by) and re-runs
+      # the build action.
+      - name: bump version + apply
+        if: steps.guard.outputs.run == 'true'
+        run: |
+          terraform apply -auto-approve -input=false \
+            -replace=time_static.image_version \
+            -var="trigger_build_on_apply=${{ inputs.trigger_build || 'true' }}"
+
+      - name: show outputs
+        if: steps.guard.outputs.run == 'true'
+        run: terraform output -json
